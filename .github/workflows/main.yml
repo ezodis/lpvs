@@ -20,23 +20,33 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY_PRIVATE }}
 
-      - name: Prepare EC2 and clean Docker
+      - name: Prepare EC2, install Docker & cleanup
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          ssh -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} '
-            set -e
+          ssh -o StrictHostKeyChecking=no ec2-user@$EC2_HOST << 'EOF'
+            set -euo pipefail
+            echo "==== 🖥 Preparing EC2 instance ===="
+
+            echo "==== 🔄 Updating packages ===="
             sudo yum update -y
+
+            echo "==== 📦 Installing dependencies ===="
             sudo yum install -y curl jq docker awscli --allowerasing
+
+            echo "==== 🚀 Enabling Docker ===="
             sudo systemctl enable --now docker
             sudo usermod -aG docker ec2-user
 
-            # Install docker-compose if missing
-            if ! command -v docker-compose &> /dev/null; then
+            # Install Docker Compose plugin
+            if ! docker compose version &>/dev/null; then
+              echo "==== ⚙️ Installing Docker Compose plugin ===="
               sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
               sudo chmod +x /usr/local/bin/docker-compose
               sudo ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
             fi
 
-            echo "==== 🧹 Cleaning containers/images/volumes ===="
+            echo "==== 🧹 Cleaning Docker containers/images/volumes ===="
             set +e
             docker ps -aq | xargs -r docker stop
             docker ps -aq | xargs -r docker rm -f
@@ -48,49 +58,56 @@ jobs:
             echo "==== 📂 Reset project folder ===="
             sudo chown -R ec2-user:ec2-user /home/ec2-user/luchandoporviviryservir || true
             rm -rf /home/ec2-user/luchandoporviviryservir
-          '
+EOF
 
       - name: Rsync project to EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          echo "==== 📤 Rsyncing project to ec2-user@${EC2_HOST}:/home/ec2-user/luchandoporviviryservir ===="
+          echo "==== 📤 Syncing project to EC2 ===="
           rsync -az --delete --exclude='.git' --exclude='node_modules' ./ ec2-user@${EC2_HOST}:/home/ec2-user/luchandoporviviryservir/
 
       - name: Start stack on EC2 (fetch DOMAIN+EMAIL, build & up)
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          echo "==== ▶️ Running remote docker compose (build + up) ===="
+          echo "==== ▶️ Running remote Docker Compose (build + up) ===="
           ssh -o StrictHostKeyChecking=no ec2-user@$EC2_HOST << 'EOF'
-          set -xe
-          cd /home/ec2-user/luchandoporviviryservir
+            set -euo pipefail
+            cd /home/ec2-user/luchandoporviviryservir
 
-          echo "==== 🔑 Fetching DOMAIN + EMAIL from SSM ===="
-          DOMAIN=$(aws ssm get-parameter --name "/lpvs/DOMAIN" --with-decryption --query "Parameter.Value" --output text)
-          EMAIL=$(aws ssm get-parameter --name "/lpvs/EMAIL" --with-decryption --query "Parameter.Value" --output text)
+            echo "==== 🔑 Fetching DOMAIN + EMAIL from SSM ===="
+            DOMAIN=$(aws ssm get-parameter --name "/lpvs/DOMAIN" --with-decryption --query "Parameter.Value" --output text)
+            EMAIL=$(aws ssm get-parameter --name "/lpvs/EMAIL" --with-decryption --query "Parameter.Value" --output text)
+            echo "DOMAIN: $DOMAIN"
+            echo "EMAIL: $EMAIL"
 
-          echo "DOMAIN: '${DOMAIN}'"
-          echo "EMAIL: '${EMAIL}'"
+            ACME_DIR="./compose/deployment/acme"
+            sudo mkdir -p "$ACME_DIR"
+            sudo touch "$ACME_DIR/acme.json" || true
+            sudo chmod 600 "$ACME_DIR/acme.json" || true
 
-          sudo mkdir -p ./compose/deployment/acme
-          sudo touch ./compose/deployment/acme/acme.json || true
-          sudo chmod 600 ./compose/deployment/acme/acme.json || true
+            echo "==== 📦 Building and starting containers ===="
+            if ! docker compose version &>/dev/null; then
+              echo "⚠️ docker compose plugin not found, using docker-compose binary"
+              COMPOSE_CMD="sudo docker-compose"
+            else
+              COMPOSE_CMD="sudo docker compose"
+            fi
 
-          echo "==== 📦 Building and starting containers ===="
-          DOMAIN="$DOMAIN" EMAIL="$EMAIL" sudo docker compose -f deployment.yml up --build -d
+            DOMAIN="$DOMAIN" EMAIL="$EMAIL" $COMPOSE_CMD -f deployment.yml up --build -d
 
-          echo "==== ✅ docker compose ps ===="
-          sudo docker compose -f deployment.yml ps || true
+            echo "==== ✅ Containers status ===="
+            $COMPOSE_CMD -f deployment.yml ps || true
 
-          echo "==== 📦 docker images (top 20) ===="
-          sudo docker images | head -n 20 || true
+            echo "==== 📦 Top 20 Docker images ===="
+            sudo docker images | head -n 20 || true
 
-          echo "==== 🐳 Recent logs (up to 200 lines) ===="
-          for svc in traefik nginx backend db; do
-            echo "---- logs: $svc ----"
-            sudo docker compose -f deployment.yml logs --no-color --tail=200 $svc || true
-          done
+            echo "==== 🐳 Recent logs (last 200 lines per service) ===="
+            for svc in traefik nginx backend db; do
+              echo "---- logs: $svc ----"
+              $COMPOSE_CMD -f deployment.yml logs --no-color --tail=200 "$svc" || true
+            done
 
-          echo "==== 🎉 Deployment finished ===="
-          EOF
+            echo "==== 🎉 Deployment finished ===="
+EOF
