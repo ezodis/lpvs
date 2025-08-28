@@ -11,23 +11,15 @@ services:
       - ./compose/deployment/acme:/etc/traefik/acme
     restart: unless-stopped
     command:
-      # Logging
       - "--log.level=INFO"
-
-      # EntryPoints
       - "--entrypoints.web.address=:80"
       - "--entrypoints.web.http.redirections.entrypoint.to=web-secure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--entrypoints.web-secure.address=:443"
-
-      # ACME (Let's Encrypt)
       - "--certificatesresolvers.letsencrypt.acme.email=${EMAIL}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-
-      # Providers
       - "--providers.docker.exposedbydefault=false"
-
     entrypoint: >
       /bin/sh -c "mkdir -p /etc/traefik/acme && touch /etc/traefik/acme/acme.json && chmod 600 /etc/traefik/acme/acme.json && traefik"
 
@@ -36,12 +28,6 @@ services:
       context: .
       dockerfile: ./compose/deployment/Dockerfile.backend
     environment:
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_USER: ${DB_USER}
-      DB_NAME: ${DB_NAME}
-      DB_HOST: ${DB_HOST}
-      DB_PORT: ${DB_PORT}
       DOMAIN: ${DOMAIN}
       EMAIL: ${EMAIL}
       DEBUG: ${DEBUG}
