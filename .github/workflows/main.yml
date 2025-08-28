@@ -12,18 +12,30 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout repo
+      # 1️⃣ Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ Set up SSH agent with your private key
       - name: Set up SSH agent
         uses: webfactory/ssh-agent@v0.5.3
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_KEY_PRIVATE }} # <-- updated secret name
+          ssh-private-key: ${{ secrets.DEPLOY_KEY_PRIVATE }}
 
+      # 3️⃣ Debug: list loaded SSH keys
+      - name: List loaded SSH keys
+        run: ssh-add -l
+
+      # 4️⃣ Debug: test SSH connection
+      - name: Test SSH connection
+        run: ssh -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} 'echo "✅ SSH connection successful"'
+
+      # 5️⃣ Prepare EC2 and clean Docker
       - name: Prepare EC2 and clean Docker
         run: |
           ssh -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} '
             set -e
+            echo "==== 🔄 Updating OS and installing dependencies ===="
             sudo yum update -y
             sudo yum install -y curl jq docker awscli --allowerasing
             sudo systemctl enable --now docker
@@ -36,7 +48,7 @@ jobs:
               sudo ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
             fi
 
-            echo "==== 🧹 Cleaning containers/images/volumes ===="
+            echo "==== 🧹 Cleaning containers, images, volumes ===="
             set +e
             docker ps -aq | xargs -r docker stop
             docker ps -aq | xargs -r docker rm -f
@@ -50,18 +62,20 @@ jobs:
             rm -rf /home/ec2-user/luchandoporviviryservir
           '
 
+      # 6️⃣ Rsync project to EC2
       - name: Rsync project to EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          echo "==== 📤 Rsyncing project to ec2-user@${EC2_HOST}:/home/ec2-user/luchandoporviviryservir ===="
+          echo "==== 📤 Rsyncing project to ec2-user@${EC2_HOST} ===="
           rsync -az --delete --exclude='.git' --exclude='node_modules' ./ ec2-user@${EC2_HOST}:/home/ec2-user/luchandoporviviryservir/
 
+      # 7️⃣ Start Docker stack on EC2
       - name: Start stack on EC2 (fetch DOMAIN+EMAIL, build & up)
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          echo "==== ▶️ Running remote docker compose (build + up) ===="
+          echo "==== ▶️ Running remote docker compose ===="
           ssh -o StrictHostKeyChecking=no ec2-user@$EC2_HOST << 'EOF'
           set -xe
           cd /home/ec2-user/luchandoporviviryservir
