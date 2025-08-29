@@ -41,9 +41,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DATABASE_URL: ${DATABASE_URL}
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=(Host(`PLACEHOLDER_DOMAIN`) || Host(`www.PLACEHOLDER_DOMAIN`)) && (PathPrefix(`/api`) || PathPrefix(`/admin`) || PathPrefix(`/static`))"
+      - "traefik.http.routers.backend.rule=(Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)) && (PathPrefix(`/api`) || PathPrefix(`/admin`) || PathPrefix(`/static`))"
       - "traefik.http.routers.backend.entrypoints=web-secure"
       - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
@@ -54,7 +57,7 @@ services:
       dockerfile: ./compose/deployment/Dockerfile.nginx
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`PLACEHOLDER_DOMAIN`) || Host(`www.PLACEHOLDER_DOMAIN`)"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
       - "traefik.http.routers.frontend.entrypoints=web-secure"
       - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
       - "traefik.http.services.frontend.loadbalancer.server.port=80"
@@ -62,13 +65,13 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
+      test: ["CMD", "pg_isready", "-U", "${DB_USER}"]
       interval: 5s
       timeout: 3s
       retries: 10
