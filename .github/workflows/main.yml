@@ -36,7 +36,7 @@ jobs:
           export DOMAIN=$(aws ssm get-parameter --name "/lpvs/DOMAIN" --with-decryption --query "Parameter.Value" --output text)
           export EMAIL=$(aws ssm get-parameter --name "/lpvs/EMAIL" --with-decryption --query "Parameter.Value" --output text)
           export DJANGO_SECRET_KEY=$(aws ssm get-parameter --name "/lpvs/DJANGO_SECRET_KEY" --with-decryption --query "Parameter.Value" --output text)
-          export DATABASE_URL=$(aws ssm get-parameter --name "/lpvs/DATABASE_URL" --with-decryption --query "Parameter.Value" --output text)
+          export DATABASE_URL=$(aws ssm get-parameter --name "/lpvs/DB_HOST" --with-decryption --query "Parameter.Value" --output text)
           export DB_USER=$(aws ssm get-parameter --name "/lpvs/DB_USER" --with-decryption --query "Parameter.Value" --output text)
           export DB_PASS=$(aws ssm get-parameter --name "/lpvs/DB_PASS" --with-decryption --query "Parameter.Value" --output text)
           export DB_NAME=$(aws ssm get-parameter --name "/lpvs/DB_NAME" --with-decryption --query "Parameter.Value" --output text)
