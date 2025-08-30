@@ -36,15 +36,19 @@ jobs:
           export DOMAIN=$(aws ssm get-parameter --name "/lpvs/DOMAIN" --with-decryption --query "Parameter.Value" --output text)
           export EMAIL=$(aws ssm get-parameter --name "/lpvs/EMAIL" --with-decryption --query "Parameter.Value" --output text)
           export DJANGO_SECRET_KEY=$(aws ssm get-parameter --name "/lpvs/DJANGO_SECRET_KEY" --with-decryption --query "Parameter.Value" --output text)
-          export DATABASE_URL=$(aws ssm get-parameter --name "/lpvs/DB_HOST" --with-decryption --query "Parameter.Value" --output text)
+
+          # DB pieces (no DATABASE_URL)
+          export DB_HOST=$(aws ssm get-parameter --name "/lpvs/DB_HOST" --with-decryption --query "Parameter.Value" --output text)
+          export DB_PORT=$(aws ssm get-parameter --name "/lpvs/DB_PORT" --with-decryption --query "Parameter.Value" --output text)
           export DB_USER=$(aws ssm get-parameter --name "/lpvs/DB_USER" --with-decryption --query "Parameter.Value" --output text)
           export DB_PASS=$(aws ssm get-parameter --name "/lpvs/DB_PASS" --with-decryption --query "Parameter.Value" --output text)
           export DB_NAME=$(aws ssm get-parameter --name "/lpvs/DB_NAME" --with-decryption --query "Parameter.Value" --output text)
 
           echo -e "\033[1;36mDOMAIN: $DOMAIN\033[0m"
           echo -e "\033[1;36mEMAIL:  $EMAIL\033[0m"
+          echo -e "\033[1;36mDB_HOST: $DB_HOST | DB_PORT: $DB_PORT | DB_NAME: $DB_NAME | DB_USER: $DB_USER\033[0m"
 
-          echo -e "\n\033[1;34m==== 🧹 Cleaning old Docker state ====\033[0m"
+          echo -e "\n\033[1;34m==== 🧹 Cleaning old Docker state (safe) ====\033[0m"
           sudo docker system prune -af || true
           sudo docker volume prune -f || true
 
@@ -57,12 +61,14 @@ jobs:
           sudo touch ./compose/deployment/acme/acme.json || true
           sudo chmod 600 ./compose/deployment/acme/acme.json || true
 
-          echo -e "\n\033[1;34m==== 🏗️ Docker Build Debug (before up) ====\033[0m"
-          sudo docker compose -f deployment.yml config || true
-          sudo docker images || true
+          echo -e "\n\033[1;34m==== 🏗️ docker compose config (pre-up) ====\033[0m"
+          # This shows how docker will resolve variables BEFORE running
+          sudo --preserve-env=DOMAIN,EMAIL,DB_HOST,DB_PORT,DB_USER,DB_PASS,DB_NAME,DJANGO_SECRET_KEY \
+            docker compose -f deployment.yml config || true
 
           echo -e "\n\033[1;34m==== 📦 Building + Starting containers ====\033[0m"
-          sudo -E docker compose -f deployment.yml up --build -d
+          sudo --preserve-env=DOMAIN,EMAIL,DB_HOST,DB_PORT,DB_USER,DB_PASS,DB_NAME,DJANGO_SECRET_KEY \
+            docker compose -f deployment.yml up --build -d
 
           echo -e "\n\033[1;34m==== 🐋 Docker Debug (after up) ====\033[0m"
           sudo docker ps -a

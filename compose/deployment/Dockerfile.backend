@@ -24,60 +24,58 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-# Install runtime dependencies
+# Install runtime dependencies (include awscli for SSM fetch)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     gettext \
     awscli \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python deps from wheels
-COPY --from=python-build-stage /wheels /wheels
-RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \
-    && rm -rf /wheels
+    # Install Python deps from wheels
+    COPY --from=python-build-stage /wheels /wheels
+    RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \
+        && rm -rf /wheels
 
-# Create app user
-RUN addgroup --system django && adduser --system --ingroup django django
+    # Create app user
+    RUN addgroup --system django && adduser --system --ingroup django django
 
-# Copy project code
-COPY --chown=django:django . /app
+    # Copy project code
+    COPY --chown=django:django . /app
 
-# entrypoint snippet inside Dockerfile.backend
-RUN printf '%s\n' \
-    '#!/bin/sh' \
-    'set -e' \
-    'echo "🔑 Fetching secrets from AWS SSM..."' \
-    'export DOMAIN=$(aws ssm get-parameter --name "/lpvs/DOMAIN" --with-decryption --query "Parameter.Value" --output text)' \
-    'export EMAIL=$(aws ssm get-parameter --name "/lpvs/EMAIL" --with-decryption --query "Parameter.Value" --output text)' \
-    'export DJANGO_SECRET_KEY=$(aws ssm get-parameter --name "/lpvs/DJANGO_SECRET_KEY" --with-decryption --query "Parameter.Value" --output text)' \
-    'export DB_PASSWORD=$(aws ssm get-parameter --name "/lpvs/DB_PASSWORD" --with-decryption --query "Parameter.Value" --output text)' \
-    'export DB_USER=$(aws ssm get-parameter --name "/lpvs/DB_USER" --with-decryption --query "Parameter.Value" --output text)' \
-    'export DB_NAME=$(aws ssm get-parameter --name "/lpvs/DB_NAME" --with-decryption --query "Parameter.Value" --output text)' \
-    'export DB_HOST=$(aws ssm get-parameter --name "/lpvs/DB_HOST" --with-decryption --query "Parameter.Value" --output text)' \
-    'export DB_PORT=$(aws ssm get-parameter --name "/lpvs/DB_PORT" --with-decryption --query "Parameter.Value" --output text)' \
-    'export DEBUG=$(aws ssm get-parameter --name "/lpvs/DEBUG" --with-decryption --query "Parameter.Value" --output text)' \
-    'export DJANGO_SUPERUSER_PASSWORD=$(aws ssm get-parameter --name "/lpvs/DJANGO_SUPERUSER_PASSWORD" --with-decryption --query "Parameter.Value" --output text)' \
-    'export DJANGO_SUPERUSER_USERNAME=$(aws ssm get-parameter --name "/lpvs/DJANGO_SUPERUSER_USERNAME" --with-decryption --query "Parameter.Value" --output text)' \
-    'echo "✅ Secrets injected into environment."' \
-    '' \
-    '# Patch Traefik placeholders dynamically' \
-    'sed -i "s/PLACEHOLDER_DOMAIN/$DOMAIN/g" /app/deployment.yml || true' \
-    '' \
-    'exec "$@"' \
-    > /entrypoint.sh && chmod +x /entrypoint.sh
+    # Entry point script for fetching secrets
+    RUN printf '%s\n' \
+        '#!/bin/sh' \
+        'set -e' \
+        'echo "🔑 Fetching secrets from AWS SSM..."' \
+        'export DOMAIN=$(aws ssm get-parameter --name "/lpvs/DOMAIN" --with-decryption --query "Parameter.Value" --output text)' \
+        'export EMAIL=$(aws ssm get-parameter --name "/lpvs/EMAIL" --with-decryption --query "Parameter.Value" --output text)' \
+        'export DJANGO_SECRET_KEY=$(aws ssm get-parameter --name "/lpvs/DJANGO_SECRET_KEY" --with-decryption --query "Parameter.Value" --output text)' \
+        'export DB_PASSWORD=$(aws ssm get-parameter --name "/lpvs/DB_PASSWORD" --with-decryption --query "Parameter.Value" --output text)' \
+        'export DB_USER=$(aws ssm get-parameter --name "/lpvs/DB_USER" --with-decryption --query "Parameter.Value" --output text)' \
+        'export DB_NAME=$(aws ssm get-parameter --name "/lpvs/DB_NAME" --with-decryption --query "Parameter.Value" --output text)' \
+        'export DB_HOST=$(aws ssm get-parameter --name "/lpvs/DB_HOST" --with-decryption --query "Parameter.Value" --output text)' \
+        'export DB_PORT=$(aws ssm get-parameter --name "/lpvs/DB_PORT" --with-decryption --query "Parameter.Value" --output text)' \
+        'export DEBUG=$(aws ssm get-parameter --name "/lpvs/DEBUG" --with-decryption --query "Parameter.Value" --output text)' \
+        'export DJANGO_SUPERUSER_PASSWORD=$(aws ssm get-parameter --name "/lpvs/DJANGO_SUPERUSER_PASSWORD" --with-decryption --query "Parameter.Value" --output text)' \
+        'export DJANGO_SUPERUSER_USERNAME=$(aws ssm get-parameter --name "/lpvs/DJANGO_SUPERUSER_USERNAME" --with-decryption --query "Parameter.Value" --output text)' \
+        'echo "✅ Secrets injected into environment."' \
+        '' \
+        'exec "$@"' \
+        > /entrypoint.sh && chmod +x /entrypoint.sh
 
-# Use entrypoint
-ENTRYPOINT ["/entrypoint.sh"]
+    # Use entrypoint
+    ENTRYPOINT ["/entrypoint.sh"]
 
-# Switch to non-root
-USER django
+    # Switch to non-root
+    USER django
 
-# --- Run collectstatic and migrate at container start ---
-CMD sh -c "\
-echo 'Running migrations...' && \
-python manage.py migrate --noinput && \
-echo 'Collecting static files...' && \
-python manage.py collectstatic --noinput && \
-echo 'Starting Gunicorn...' && \
-exec gunicorn --bind 0.0.0.0:8000 myproject.wsgi:application \
-"
+    # --- Run collectstatic and migrate at container start ---
+    CMD sh -c "\
+    echo '🚀 Starting backend container...' && \
+    echo '📦 Running migrations...' && \
+    python manage.py migrate --noinput && \
+    echo '📦 Collecting static files...' && \
+    python manage.py collectstatic --noinput && \
+    echo '🔥 Launching Gunicorn server...' && \
+    exec gunicorn --bind 0.0.0.0:8000 myproject.wsgi:application \
+    "
