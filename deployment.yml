@@ -7,9 +7,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./compose/deployment/acme:/etc/traefik/acme
-    restart: unless-stopped
     command:
       # Logging
       - "--log.level=INFO"
@@ -42,28 +41,33 @@ services:
       db:
         condition: service_healthy
     environment:
+      # secret values provided by the host (SSM -> exported in the GitHub Action remote script)
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
-      # Django expects these individual pieces (no DATABASE_URL)
       DB_HOST: ${DB_HOST}
       DB_PORT: ${DB_PORT}
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
-      # If your Django settings look for DB_PASSWORD, map it from DB_PASS:
-      DB_PASSWORD: ${DB_PASS}
-      # Optional if your app reads them:
+      DB_PASSWORD: ${DB_PASSWORD}
       DOMAIN: ${DOMAIN}
       EMAIL: ${EMAIL}
+      DEBUG: ${DEBUG}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=(Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)) && (PathPrefix(`/api`) || PathPrefix(`/admin`) || PathPrefix(`/static`))"
       - "traefik.http.routers.backend.entrypoints=web-secure"
       - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   nginx:
     build:
       context: .
       dockerfile: ./compose/deployment/Dockerfile.nginx
+    restart: unless-stopped
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
@@ -73,10 +77,11 @@ services:
 
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}   # <- consistent name
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -87,4 +92,3 @@ services:
 
 volumes:
   db_data:
-

@@ -2,17 +2,16 @@
 # ---------- Build Stage ----------
 FROM python:3.11-slim AS python-build-stage
 
-WORKDIR /app
+WORKDIR /wheels
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and build wheels
+# Copy only requirements to build wheels
 COPY modules/requirements/ ./requirements/
 RUN pip wheel --wheel-dir /wheels -r requirements/deployment.txt
 
@@ -24,58 +23,49 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-# Install runtime dependencies (include awscli for SSM fetch)
+# runtime deps (awscli is needed if fetching inside container)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     gettext \
+    curl \
     awscli \
     && rm -rf /var/lib/apt/lists/*
 
-    # Install Python deps from wheels
-    COPY --from=python-build-stage /wheels /wheels
-    RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \
-        && rm -rf /wheels
+COPY --from=python-build-stage /wheels /wheels
+RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \
+    && rm -rf /wheels
 
-    # Create app user
-    RUN addgroup --system django && adduser --system --ingroup django django
+RUN addgroup --system django && adduser --system --ingroup django django
+COPY --chown=django:django . /app
 
-    # Copy project code
-    COPY --chown=django:django . /app
+# Bake entrypoint that fetches ALL SSM params
+RUN printf '%s\n' \
+  '#!/bin/sh' \
+  'set -e' \
+  'echo "🔑 Fetching secrets from AWS SSM..."' \
+  'export DOMAIN=$(aws ssm get-parameter --name "/lpvs/DOMAIN" --with-decryption --query "Parameter.Value" --output text)' \
+  'export EMAIL=$(aws ssm get-parameter --name "/lpvs/EMAIL" --with-decryption --query "Parameter.Value" --output text)' \
+  'export DJANGO_SECRET_KEY=$(aws ssm get-parameter --name "/lpvs/DJANGO_SECRET_KEY" --with-decryption --query "Parameter.Value" --output text)' \
+  'export DB_PASSWORD=$(aws ssm get-parameter --name "/lpvs/DB_PASSWORD" --with-decryption --query "Parameter.Value" --output text)' \
+  'export DB_USER=$(aws ssm get-parameter --name "/lpvs/DB_USER" --with-decryption --query "Parameter.Value" --output text)' \
+  'export DB_NAME=$(aws ssm get-parameter --name "/lpvs/DB_NAME" --with-decryption --query "Parameter.Value" --output text)' \
+  'export DB_HOST=$(aws ssm get-parameter --name "/lpvs/DB_HOST" --with-decryption --query "Parameter.Value" --output text)' \
+  'export DB_PORT=$(aws ssm get-parameter --name "/lpvs/DB_PORT" --with-decryption --query "Parameter.Value" --output text)' \
+  'export DEBUG=$(aws ssm get-parameter --name "/lpvs/DEBUG" --with-decryption --query "Parameter.Value" --output text || echo "False")' \
+  'export DJANGO_SUPERUSER_USERNAME=$(aws ssm get-parameter --name "/lpvs/DJANGO_SUPERUSER_USERNAME" --with-decryption --query "Parameter.Value" --output text || true)' \
+  'export DJANGO_SUPERUSER_PASSWORD=$(aws ssm get-parameter --name "/lpvs/DJANGO_SUPERUSER_PASSWORD" --with-decryption --query "Parameter.Value" --output text || true)' \
+  'echo "✅ Secrets injected into environment."' \
+  '' \
+  'echo "📦 Running migrations..."' \
+  'python manage.py migrate --noinput' \
+  'echo "📦 Collecting static files..."' \
+  'python manage.py collectstatic --noinput' \
+  'echo "🔥 Launching Gunicorn..."' \
+  'exec "$@"' \
+  > /entrypoint.sh && chmod +x /entrypoint.sh
 
-    # Entry point script for fetching secrets
-    RUN printf '%s\n' \
-        '#!/bin/sh' \
-        'set -e' \
-        'echo "🔑 Fetching secrets from AWS SSM..."' \
-        'export DOMAIN=$(aws ssm get-parameter --name "/lpvs/DOMAIN" --with-decryption --query "Parameter.Value" --output text)' \
-        'export EMAIL=$(aws ssm get-parameter --name "/lpvs/EMAIL" --with-decryption --query "Parameter.Value" --output text)' \
-        'export DJANGO_SECRET_KEY=$(aws ssm get-parameter --name "/lpvs/DJANGO_SECRET_KEY" --with-decryption --query "Parameter.Value" --output text)' \
-        'export DB_PASSWORD=$(aws ssm get-parameter --name "/lpvs/DB_PASSWORD" --with-decryption --query "Parameter.Value" --output text)' \
-        'export DB_USER=$(aws ssm get-parameter --name "/lpvs/DB_USER" --with-decryption --query "Parameter.Value" --output text)' \
-        'export DB_NAME=$(aws ssm get-parameter --name "/lpvs/DB_NAME" --with-decryption --query "Parameter.Value" --output text)' \
-        'export DB_HOST=$(aws ssm get-parameter --name "/lpvs/DB_HOST" --with-decryption --query "Parameter.Value" --output text)' \
-        'export DB_PORT=$(aws ssm get-parameter --name "/lpvs/DB_PORT" --with-decryption --query "Parameter.Value" --output text)' \
-        'export DEBUG=$(aws ssm get-parameter --name "/lpvs/DEBUG" --with-decryption --query "Parameter.Value" --output text)' \
-        'export DJANGO_SUPERUSER_PASSWORD=$(aws ssm get-parameter --name "/lpvs/DJANGO_SUPERUSER_PASSWORD" --with-decryption --query "Parameter.Value" --output text)' \
-        'export DJANGO_SUPERUSER_USERNAME=$(aws ssm get-parameter --name "/lpvs/DJANGO_SUPERUSER_USERNAME" --with-decryption --query "Parameter.Value" --output text)' \
-        'echo "✅ Secrets injected into environment."' \
-        '' \
-        'exec "$@"' \
-        > /entrypoint.sh && chmod +x /entrypoint.sh
+USER django
 
-    # Use entrypoint
-    ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 
-    # Switch to non-root
-    USER django
-
-    # --- Run collectstatic and migrate at container start ---
-    CMD sh -c "\
-    echo '🚀 Starting backend container...' && \
-    echo '📦 Running migrations...' && \
-    python manage.py migrate --noinput && \
-    echo '📦 Collecting static files...' && \
-    python manage.py collectstatic --noinput && \
-    echo '🔥 Launching Gunicorn server...' && \
-    exec gunicorn --bind 0.0.0.0:8000 myproject.wsgi:application \
-    "
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "myproject.wsgi:application"]
